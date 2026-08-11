@@ -1,0 +1,50 @@
+# --- Core Web Framework ---
+fastapi
+uvicorn[standard]
+python-multipart
+
+# --- Environment / Config ---
+python-dotenv
+pydantic
+pydantic-settings
+
+# --- LangChain / LangGraph Ecosystem ---
+langchain
+langchain-core
+langchain-community
+langgraph
+langchain-groq
+langchain-google-genai
+
+# --- LLM Providers (direct SDKs) ---
+groq
+google-generativeai
+
+# --- Database (PostgreSQL) ---
+psycopg2-binary
+sqlalchemy
+asyncpg
+alembic
+
+# --- Redis ---
+redis
+
+# --- Data Handling / Structured Output ---
+orjson
+tenacity
+
+# --- HTTP / Async utilities ---
+httpx
+aiohttp
+
+# --- Logging / Utils ---
+loguru
+
+# --- LangGraph + Postgres checkpointing (if used) ---
+langgraph-checkpoint-postgres
+
+# --- Development, Testing & Linting ---
+pytest
+pytest-asyncio
+locust
+ruff
