@@ -1,0 +1,64 @@
+# --- Environment / Secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Data / Dumps / Sensitive Files ---
+*.csv
+*.xlsx
+*.json.bak
+*.sqlite3
+*.db
+*.dump
+*.bak
+*.tmp
+dump.rdb
+pg_dump_*.sql
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Test / Coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# --- LangChain / LangGraph caches ---
+.langchain/
+langgraph_checkpoints/
