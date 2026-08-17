@@ -3,8 +3,7 @@ from langgraph.graph import END
 
 def route_after_detection(state: GraphState) -> str:
      """
-    Routes the graph to the sanitize node if PII entities are detected; 
-    otherwise, ends the graph execution.
+    Routes the graph to the sanitize node if PII entities are detected, otherwise ends the graph execution.
     """
 
      detected_entities = state.get("detected_entities", [])
