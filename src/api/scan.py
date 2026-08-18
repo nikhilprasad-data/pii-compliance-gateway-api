@@ -1,6 +1,9 @@
 from fastapi import APIRouter, HTTPException, status
 from src.schemas import ScanRequest, DetectedEntity, ScanResponse
+from src.agent.graph import build_workflow
+import time
 
+app_engine = build_workflow()
 
 scan_router = APIRouter()
 
@@ -13,19 +16,20 @@ async def scan_pii(request: ScanRequest):
     """
 
      try:
+
+          start_time = time.time()
+
           scan_text  = request.text
 
-          mock_entity = {
-            "entity_type": "CREDIT_CARD",
-            "start_index": 12,
-            "end_index": 28
-          }
+          result_state = app_engine.invoke({"original_text" : scan_text})
+
+          process_time_ms = int(time.time() - start_time) * 1000
 
           return {
                "original_text"     : scan_text,
-               "sanitized_text"    : "Hello Nikhil",
-               "detected_pii"      : [mock_entity],
-               "processing_time_ms": 12.5
+               "sanitized_text"    : result_state.get("sanitized_text", ""),
+               "detected_pii"      : result_state.get("detected_entities", []),
+               "processing_time_ms": process_time_ms
           }
      
      except Exception as e:
