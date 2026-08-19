@@ -1,5 +1,17 @@
 from src.agent.state import GraphState
 from src.schemas import DetectedEntity
+from src.services import get_llm
+from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
+from typing import List
+from src.agent.prompts import DETECT_PII_PROMPT
+
+class PIIExtraction(BaseModel):
+     entities: List[DetectedEntity] = Field(description= "List of detected entities")
+
+llm = get_llm()
+
+structured_llm = llm.with_structured_output(PIIExtraction)
 
 def detect_pii(state: GraphState):
      """
@@ -10,16 +22,17 @@ def detect_pii(state: GraphState):
 
           incoming_text = state.get("original_text", "")
 
-          mock_entity = DetectedEntity(
-               entity_type= "CREDIT_CARD",
-               start_index= 12,
-               end_index= 28
-          )
+          prompt = ChatPromptTemplate.from_messages([
+               ("system", DETECT_PII_PROMPT),
+               ("human", "{text}")
+          ])
 
-          dummy_detected_entitiy =  [mock_entity]
+          chain = prompt | structured_llm
+
+          result = chain.invoke({"text" : incoming_text})
 
           return {
-               "detected_entities" : dummy_detected_entitiy
+               "detected_entities" : result.entities
           }
           
      except Exception as e:
