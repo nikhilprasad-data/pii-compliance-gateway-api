@@ -9,11 +9,23 @@ def sanitize_text(state: GraphState):
 
           detected_entities = state.get("detected_entities", [])
 
-          sanitized_text = "This is a mocked [REDACTED] string."
+          if not detected_entities:
+               return {"sanitized_text" : original_text}
 
-          return {
-               "sanitized_text" : sanitized_text
-          }
+          else:               
+               sanitized_text = original_text
+
+               detected_entities.sort(key =lambda x:  x.start_index, reverse= True)
+
+               for entity in detected_entities:
+                    s_i = entities.start_index
+                    e_i = entities.end_index
+
+                    sanitized_text = sanitized_text[:s_i] + "REDACTED" + sanitized_text[e_i:]
+               
+               return {
+                    "sanitized_text" : sanitized_text
+               }
      
      except Exception as e:
 
