@@ -21,7 +21,7 @@ def sanitize_text(state: GraphState):
                     s_i = entities.start_index
                     e_i = entities.end_index
 
-                    sanitized_text = sanitized_text[:s_i] + "REDACTED" + sanitized_text[e_i:]
+                   sanitized_text = sanitized_text[:s_i] + "[REDACTED]" + sanitized_text[e_i:]
                
                return {
                     "sanitized_text" : sanitized_text
