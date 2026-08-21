@@ -418,6 +418,7 @@ Return **ONLY JSON** compatible with this Pydantic structure:
   "entities": [
     {
       "entity_type": "EMAIL_ADDRESS",
+      "entity_value": "john@example.com"
       "start_index": 10,
       "end_index": 27
     }
@@ -428,12 +429,12 @@ Return **ONLY JSON** compatible with this Pydantic structure:
 Every entity must contain exactly:
 
 * `entity_type`
+* `entity_value`
 * `start_index`
 * `end_index`
 
 Do **not** return:
 
-* `value`
 * `text`
 * `confidence`
 * `reason`
