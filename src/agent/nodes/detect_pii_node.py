@@ -5,6 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from typing import List
 from src.agent.prompts import DETECT_PII_PROMPT
+from langchain_core.messages import SystemMessage
 
 class PIIExtraction(BaseModel):
      entities: List[DetectedEntity] = Field(description= "List of detected entities")
@@ -23,7 +24,7 @@ def detect_pii(state: GraphState):
           incoming_text = state.get("original_text", "")
 
           prompt = ChatPromptTemplate.from_messages([
-               ("system", DETECT_PII_PROMPT),
+               SystemMessage(content=DETECT_PII_PROMPT),
                ("human", "{text}")
           ])
 
