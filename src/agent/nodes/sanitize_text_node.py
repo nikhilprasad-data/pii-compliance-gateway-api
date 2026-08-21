@@ -15,14 +15,9 @@ def sanitize_text(state: GraphState):
           else:               
                sanitized_text = original_text
 
-               detected_entities.sort(key =lambda x:  x.start_index, reverse= True)
-
                for entity in detected_entities:
-                    s_i = entities.start_index
-                    e_i = entities.end_index
+                    sanitized_text = sanitized_text.replace(entity.entity_value, "[REDACTED]")
 
-                   sanitized_text = sanitized_text[:s_i] + "[REDACTED]" + sanitized_text[e_i:]
-               
                return {
                     "sanitized_text" : sanitized_text
                }
