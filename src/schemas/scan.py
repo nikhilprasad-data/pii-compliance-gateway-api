@@ -10,6 +10,7 @@ class DetectedEntity(BaseModel):
      """A single piece of identified PII, including its category and exact position in the text."""
 
      entity_type:str
+     entity_value:str
      start_index:int
      end_index:int
 
