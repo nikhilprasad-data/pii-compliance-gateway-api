@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis 
-from src.core import get_db, get_redis
+from src.core import get_db, get_redis, check_rate_limit
 from src.agent.graph import build_workflow 
 from src.schemas import ScanRequest, ScanResponse, DetectedEntity
 from src.models import AuditLog
@@ -14,7 +14,7 @@ app_engine = build_workflow()
 scan_router = APIRouter()
 
 @scan_router.post('/scan', response_model=ScanResponse, tags=["Scanner"], status_code=status.HTTP_200_OK)
-async def scan_pii(request: ScanRequest, db: AsyncSession = Depends(get_db),redis_client: Redis = Depends(get_redis)):
+async def scan_pii(request: ScanRequest, db: AsyncSession = Depends(get_db),redis_client: Redis = Depends(get_redis), rate_limit: None = Depends(check_rate_limit)):
 
      """
      Receives raw text, processes it through the LangGraph PII detection engine,
