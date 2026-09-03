@@ -1,4 +1,21 @@
 services:
+  backend_api:
+    build: .
+    container_name: pii_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_HOST=postgres_db
+      - DB_PORT=5432
+      - REDIS_HOST=redis_cache
+      - REDIS_PORT=6379
+    depends_on:
+      - postgres_db
+      - redis_cache
+
   postgres_db:
     image: postgres:15-alpine
     container_name: pii_postgres
