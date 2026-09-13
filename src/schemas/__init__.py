@@ -1,1 +1,1 @@
-from .scan import ScanRequest, DetectedEntity, ScanResponse
+from .scan import ScanRequest, DetectedEntity, ScanResponse, DetectedPII

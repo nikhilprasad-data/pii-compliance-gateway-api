@@ -14,7 +14,7 @@ llm = get_llm()
 
 structured_llm = llm.with_structured_output(PIIExtraction)
 
-def detect_pii(state: GraphState):
+async def  detect_pii(state: GraphState):
      """
     Analyzes the incoming text and detects PII entities.
     """
@@ -30,7 +30,7 @@ def detect_pii(state: GraphState):
 
           chain = prompt | structured_llm
 
-          result = chain.invoke({"text" : incoming_text})
+          result = await chain.ainvoke({"text" : incoming_text})
 
           return {
                "detected_entities" : result.entities

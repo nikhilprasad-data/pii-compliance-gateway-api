@@ -5,13 +5,33 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - APP_NAME=${APP_NAME}
+      - APP_VERSION=${APP_VERSION}
+      - API_V1_STR=${API_V1_STR}
+      - DEBUG=${DEBUG}
+
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2}
+
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
       - DB_HOST=postgres_db
       - DB_PORT=5432
+
       - REDIS_HOST=redis_cache
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_DB=${REDIS_DB}
+
+      - ALGORITHM=${ALGORITHM}
+      - JWT_TOKEN_EXPIRATION_TIME_MINUTES=${JWT_TOKEN_EXPIRATION_TIME_MINUTES}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+
+      - FRONTEND_URL=${FRONTEND_URL}
     depends_on:
       - postgres_db
       - redis_cache

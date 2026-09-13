@@ -14,12 +14,18 @@ class DetectedEntity(BaseModel):
      start_index:int
      end_index:int
 
+class DetectedPII(BaseModel):
+    """Safe PII metadata exposed through the public API."""
+
+    entity_type: str
+    start_index: int
+    end_index: int
+
 class ScanResponse(BaseModel):
      """The final JSON response sent back to the client with the safe text and audit details."""
      
-     original_text: str
      sanitized_text: str
-     detected_pii: List[DetectedEntity]
+     detected_pii: List[DetectedPII]
      processing_time_ms: float
 
      model_config = ConfigDict(from_attributes=True)
