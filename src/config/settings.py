@@ -32,6 +32,7 @@ class Settings(BaseSettings):
      REDIS_PORT: int | None = None
      REDIS_PASSWORD: str | None = None
      REDIS_DB: int | None = None
+     REDIS_SSL: bool = False
 
      class Config:
          env_file = ".env"

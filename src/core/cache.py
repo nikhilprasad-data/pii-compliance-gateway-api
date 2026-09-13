@@ -7,6 +7,7 @@ redis_client = redis.Redis(
     port=settings.REDIS_PORT,
     password=settings.REDIS_PASSWORD,
     db=settings.REDIS_DB,
+    ssl=settings.REDIS_SSL,
     decode_responses=True,
 )
 
