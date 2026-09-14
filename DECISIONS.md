@@ -1,8 +1,8 @@
 # Engineering Decisions
 
-This document explains the main technical decisions behind the PII Compliance Gateway, the problems that led to them, and the trade-offs I considered while building the system.
+This document walks through the main technical calls behind the PII Compliance Gateway — what broke, what I chose instead, and why.
 
-The goal was not to make every part of the system AI-driven. Instead, I wanted each component to handle the part it is best suited for: AI for PII discovery, Python for deterministic sanitization, Redis for fast temporary operations, and PostgreSQL for persistent audit-related data.
+I didn't want every part of this system to be AI-driven just because it's an "AI project." Each piece does the part it's actually good at: the model handles discovery, Python handles deterministic sanitization, Redis handles anything fast and temporary, Postgres holds anything that needs to persist.
 
 ---
 
@@ -10,39 +10,27 @@ The goal was not to make every part of the system AI-driven. Instead, I wanted e
 
 ### Problem
 
-PII can appear in predictable formats, but users do not always write sensitive information in the same way.
+PII shows up in predictable shapes sometimes — a standard email regex catches most emails — but people don't write sensitive info consistently. Names buried mid-sentence, an SSN with spaces instead of dashes, a credit card split across lines. Regex alone falls apart once the input isn't clean.
 
-A traditional rule-based system can handle patterns such as standard email addresses, phone numbers, or credit card formats, but it becomes harder to maintain when the input becomes less predictable or contains contextual information.
-
-I wanted the gateway to have a workflow that could combine PII detection with structured processing instead of putting all of the logic directly inside the FastAPI route.
+I also didn't want to shove a raw LLM call directly into the FastAPI route and call it done. That gets messy fast the moment you need more than one step — validation, retries, structured output, whatever comes next.
 
 ### Options considered
 
 - Regular expressions and static rules
-- A simple LLM call directly inside the API route
-- LangGraph-based workflow
+- A bare LLM call inside the route handler
+- A LangGraph-based workflow
 
 ### Decision
 
-I chose LangGraph to orchestrate the PII detection workflow.
-
-FastAPI handles the API layer, while the LangGraph workflow handles the AI-related processing.
-
-This keeps the API route focused on request handling, validation, caching, rate limiting, and persistence instead of making it responsible for the entire PII detection process.
+I chose LangGraph to orchestrate the detection workflow. FastAPI stays focused on the HTTP layer — validation, caching, rate limiting, persistence — and hands the actual PII-finding off to the workflow.
 
 ### Why
 
-LangGraph gives the project a structured way to organize the processing steps and makes it easier to add or change workflow logic later.
-
-It also gives me more flexibility than keeping the entire detection process as a collection of static regular expressions.
+LangGraph gives me a real place to put processing steps instead of stacking logic inside one function. If I need to add a step later — a second validation pass, a different model, whatever — there's already a structure for that. A pile of regexes doesn't give you that room to grow.
 
 ### Trade-off
 
-The main trade-off is complexity and latency.
-
-A rule-based solution would be simpler and faster for predictable patterns. Using an LLM-based workflow introduces model dependency, additional processing time, and more moving parts.
-
-For this project, I accepted that trade-off because the goal was to explore an AI-driven PII detection workflow rather than build only a traditional regex scanner.
+It's slower and heavier than regex, no question. Model dependency, extra latency, more moving parts to reason about. I took that trade-off on purpose — the goal was building an AI-driven detection workflow, not shipping another regex scanner with a fancier name.
 
 ---
 
@@ -50,33 +38,19 @@ For this project, I accepted that trade-off because the goal was to explore an A
 
 ### Problem
 
-LLM output cannot be treated as trusted application data just because the model returned something that looks correct.
-
-The sanitization workflow needs predictable information about the entities detected by the model.
+You can't just trust whatever the model hands back because it "looks right." Sanitization downstream needs something predictable to work with, not free-text that happens to resemble JSON.
 
 ### Decision
 
-I used Pydantic models to define the expected structure of the detection results.
-
-The model output is converted into structured data before the application uses it for the sanitization process.
-
-The important information includes the detected entity type and the actual entity value.
+Pydantic models define the shape detection results have to take — entity type, entity value — before anything else touches that data.
 
 ### Why
 
-Using a schema gives the application a clear contract for the AI output.
-
-Instead of allowing arbitrary model-generated data to flow directly into the rest of the application, the output has to fit the structure expected by the system.
-
-This also makes the LangGraph workflow easier to reason about and maintain.
+This gives the AI output an actual contract instead of letting arbitrary model output flow straight into the rest of the app. If the model returns something malformed, it fails validation instead of silently corrupting a downstream step. It also keeps the LangGraph workflow easier to debug when something does go wrong.
 
 ### Trade-off
 
-The schema adds some structure that needs to be maintained as the workflow changes.
-
-If the model output changes, the Pydantic schema and related processing logic may also need to change.
-
-I considered this a worthwhile trade-off because predictable application data is more important than keeping the AI output completely unstructured.
+The schema has to be maintained alongside the workflow — if the model's output shape changes, the schema and whatever depends on it need updating too. Worth it. Predictable data beats flexible-but-untrustworthy data every time here.
 
 ---
 
@@ -84,27 +58,23 @@ I considered this a worthwhile trade-off because predictable application data is
 
 ### Problem
 
-This was one of the main problems I encountered while building the project.
+This was the big one.
 
-Initially, the `sanitize_text` step relied on the LLM returning the exact `start_index` and `end_index` of detected PII.
-
-The idea was simple:
+The first version of `sanitize_text` had the LLM return exact `start_index` and `end_index` values for each PII match. The plan:
 
 1. Ask the model to detect the PII.
 2. Get the character indexes.
 3. Use Python string slicing to replace that section with a redacted value.
 
-The problem was that the indexes were not always reliable.
+Sounded deterministic. Wasn't.
 
-LLMs process text using tokens, while Python string operations work with character positions. As the text became longer or more complex, the model's calculated positions could drift by one or more characters.
-
-That resulted in corrupted redaction such as:
+LLMs think in tokens, not characters. Python string ops think in character positions. Those two don't always line up, and the longer or messier the input got, the more the model's position guesses drifted — sometimes by one character, sometimes by more. That gave me redaction output like:
 
 ```text
 Lo[REDACTED]ission
 ```
 
-instead of replacing the complete sensitive value.
+instead of catching the full sensitive value. Silent corruption, not a crash — which made it worse, because nothing was throwing an error to tell me it was wrong.
 
 **Initial approach**
 
@@ -120,11 +90,11 @@ Python string slicing
 Redacted text
 ```
 
-The approach looked deterministic from the Python side, but it depended on the LLM providing mathematically accurate character positions.
+Looked clean from the Python side. Was entirely dependent on the model doing accurate character math, which it just doesn't reliably do.
 
 ### Decision
 
-I changed the design so that the LLM identifies the actual sensitive value instead of being responsible for calculating the exact character range.
+I ripped the index logic out. The model's only job now is to identify the actual sensitive *value*, not where it sits in the string.
 
 The new approach is:
 
@@ -136,35 +106,33 @@ Pydantic validates structured output
 Python performs the replacement
 ```
 
-Python's native string replacement is then used for the actual sanitization.
+Python's native string replacement does the actual sanitization now.
 
 ### Why
 
-This separates two different responsibilities.
+Two different jobs, two different tools.
 
 The LLM is good at:
 
-- Identifying what looks like PII.
+- Identifying what looks like PII
+- Identifying the type of PII
 
 Python is better at:
 
-- Performing a deterministic string transformation.
+- Performing a deterministic string transformation
+- Applying the final redaction logic
 
-There was no reason to make the LLM responsible for something that Python can do more reliably.
+There's no reason to make the model responsible for character-level precision when it's not built for that.
 
 ### Result
 
-The change removed the index-based redaction problem I encountered and made the sanitization behavior much more predictable.
-
-The main design principle that came out of this was:
+This killed the index-drift bug outright and made sanitization behavior actually predictable instead of "usually works." The principle that came out of it:
 
 > **AI identifies the entity; Python replaces the entity.**
 
 ### Trade-off
 
-Using the actual entity value makes the sanitization logic simpler, but it also means the replacement strategy needs to be designed carefully when the same value appears multiple times or when more complex matching rules are required.
-
-For the current project, the predictable behavior was more valuable than keeping the LLM responsible for character-level operations.
+Matching on the raw value is simpler, but it means I have to think harder about edge cases — what happens if the same value shows up twice, or if I need fuzzier matching later. For now, predictable behavior mattered more than handling every edge case up front.
 
 ---
 
@@ -172,9 +140,7 @@ For the current project, the predictable behavior was more valuable than keeping
 
 ### Problem
 
-PII detection can be an expensive part of the request path, especially when the same input is scanned repeatedly.
-
-If the exact same text is submitted again, running the complete detection workflow again is unnecessary.
+Detection isn't cheap — if the same text gets scanned twice, running the full workflow again is just wasted latency and wasted model calls.
 
 ### Decision
 
@@ -190,23 +156,33 @@ SHA-256
 scan_cache:{hash}
 ```
 
-Cached results currently have a 24-hour expiration.
+Cached results expire after 24 hours.
 
 ### Why Redis
 
-Redis provides fast key-value access and works well for temporary application data such as cached responses.
+Fast key-value access, good fit for temporary application data like cached responses. Lets the API return a previously processed result without re-running the full PII workflow.
 
-It also allows the API to return a previously processed result without running the complete PII workflow again.
+The cache key is derived from the input via SHA-256, so the raw input never sits directly in the Redis key.
+
+### Cached data
+
+The cached value holds what's needed to reproduce the API response:
+
+- Sanitized text
+- Detected PII metadata
+- Processing time
+
+The original raw input is not part of the cached response.
+
+### Privacy consideration
+
+Caching still has a privacy dimension because the system handles potentially sensitive text. That's why the cache is deliberately scoped to just what's needed to reproduce the response — nothing more.
+
+The design keeps raw input out of both the cache key and the cached response, and entries expire after 24 hours regardless.
 
 ### Trade-off
 
-Caching improves repeated-request latency, but it introduces a data-retention consideration.
-
-The SHA-256 cache key does not contain the raw input text, but the cached value currently contains response data that includes the original input.
-
-Because this project handles potentially sensitive information, the cache payload and retention policy need to be treated as part of the privacy design rather than only as a performance feature.
-
-The current direction is to redesign the cache so that raw input is not retained unnecessarily.
+Caching makes repeats much faster, but it also means sanitized response data sits in Redis temporarily. I accepted that because the expiration window is short and it saves repeating an expensive workflow for identical input.
 
 ---
 
@@ -214,11 +190,7 @@ The current direction is to redesign the cache so that raw input is not retained
 
 ### Problem
 
-Caching and rate limiting solve different problems.
-
-Caching helps repeated requests become faster, but it does not stop a client from sending a large number of requests and consuming application resources.
-
-The gateway therefore also needs a basic protection mechanism against excessive requests.
+Caching and rate limiting look similar — both live in Redis, both have a TTL — but they solve different problems. Caching makes repeats fast. It does nothing to stop someone from hammering the API with a thousand unique requests a minute. Needed a separate mechanism for that.
 
 ### Decision
 
@@ -228,7 +200,7 @@ The current limit is:
 
 > **50 requests per IP within 60 seconds**
 
-When the limit is exceeded, the API returns:
+Over the limit, the API returns:
 
 > **HTTP 429 — Too Many Requests**
 
@@ -236,17 +208,13 @@ with a `Retry-After` response header.
 
 ### Why Redis
 
-Redis is already part of the gateway for caching, so it provides a natural place to keep short-lived request counters.
-
-The counter does not need to be stored permanently in PostgreSQL.
+Redis was already in the stack for caching, so it's a natural spot for short-lived request counters too. No reason to make Postgres hold something that only matters for 60 seconds.
 
 ### Why Lua
 
-The rate limiter uses a Redis Lua script to increment the counter and set the expiration atomically.
+The naive version of this — handling the counter across several separate Redis calls — creates a race condition when requests land at the same time: two requests can both read the counter before either one increments it, and the limit quietly stops holding.
 
-The important part is that the counter and its expiration are handled together instead of relying on separate application-level operations.
-
-Conceptually:
+The Lua script handles the counter increment and the initial expiration as one atomic Redis operation. Conceptually:
 
 ```
 Request
@@ -255,18 +223,18 @@ INCR counter
    ↓
 If first request → set expiration
    ↓
+Return current count
+   ↓
 Check limit
    ↓
 Allow or return 429
 ```
 
+Python checks the returned count against the configured limit. That keeps the counter update consistent even when multiple requests hit at once — no window for the race to sneak in.
+
 ### Trade-off
 
-IP-based limiting is simple to implement, but it is not a complete identity-based abuse-prevention system.
-
-Multiple users can share an IP address, and clients behind proxies or NAT can make IP-based limits less precise.
-
-For the current gateway, it provides a useful basic protection layer. Authentication-aware or distributed rate limiting can be added later.
+IP-based limiting is easy to build but not a complete abuse-prevention story. Multiple users behind the same IP, NAT, corporate proxies — all of that makes per-IP limits blunt rather than precise. Good enough as a first line of defense. Auth-aware or distributed rate limiting is a later problem if the project ever needs it.
 
 ---
 
@@ -274,23 +242,15 @@ For the current gateway, it provides a useful basic protection layer. Authentica
 
 ### Problem
 
-Redis is useful for temporary data, but it is not the right place for persistent audit-related records.
-
-The gateway needs a persistent storage layer for information that may need to be reviewed later.
+Redis is great for short-lived stuff, bad for anything that needs to survive a restart or actually be queried later. Audit records need to persist.
 
 ### Decision
 
-I use PostgreSQL for audit-related persistence.
-
-The FastAPI application uses SQLAlchemy's asynchronous database layer to interact with PostgreSQL.
+I use PostgreSQL for persistent audit-related data, accessed through SQLAlchemy's async layer.
 
 ### Why PostgreSQL
 
-PostgreSQL provides durable storage and supports structured querying of audit records.
-
-This makes it more appropriate for persistent application data than Redis, whose primary role in this project is temporary and fast-access data.
-
-The separation is therefore:
+Durable storage, real structured queries against audit records — something Redis isn't built for. The split is clean:
 
 ```
 Redis
@@ -305,19 +265,26 @@ PostgreSQL
 
 ### Privacy trade-off
 
-The original implementation stored the raw input in the audit record.
+The first version of this stored the raw input directly in the audit record. Great for debugging, not great for privacy — storing PII specifically so you can audit for PII issues is its own kind of data-retention risk, and that started to bother me once I actually sat with it.
 
-That made the audit trail useful for development and debugging, but it also created an important privacy question: storing PII for auditing can itself become a data-retention risk.
+That made me rethink what the audit log actually needed to hold. The current `audit_logs` table stores:
 
-I decided that the gateway should move toward storing sanitized or audit-safe information where possible instead of retaining raw PII unnecessarily.
+- Sanitized text
+- Detected PII metadata
+- Processing time
+- Timestamp
 
-This is an architectural improvement rather than a claim that the current implementation has already solved the entire data-retention problem.
+The original raw input is no longer stored, period.
 
-### Current direction
+The goal is simple: keep enough to understand what happened without turning the audit log into another place sensitive input quietly piles up.
 
-The database retention model and Redis cache payload are both being reviewed as part of the project's privacy design.
+### Schema changes
 
-The goal is to keep enough information for useful auditing and debugging without retaining sensitive input longer than necessary.
+Database changes go through Alembic migrations. That means things like dropping the raw input column and changing the processing-time type are tracked in the repo instead of being hand-applied to production — and the exact same migration reproduces across dev and prod.
+
+### Trade-off
+
+Dropping the original input makes some debugging scenarios harder — I can't just look at the database and reconstruct the request that produced a record. I accepted that because keeping sensitive input around purely for debugging convenience defeats the entire point of a system built to reduce PII exposure.
 
 ---
 
@@ -325,13 +292,11 @@ The goal is to keep enough information for useful auditing and debugging without
 
 ### Problem
 
-The PII gateway is fundamentally an API service, but it also needs a user-friendly interface for testing and demonstrating the system.
-
-I did not want the backend to depend on the dashboard in order to be useful.
+The gateway is fundamentally an API. It also needs a UI so people can actually see it work without curling endpoints. I didn't want the backend to depend on that UI existing to be useful.
 
 ### Decision
 
-I separated the project into two repositories:
+I split the project into two repos:
 
 ```
 pii-compliance-gateway-api
@@ -345,26 +310,20 @@ Next.js frontend
 
 ### Why
 
-The backend can be consumed independently by other clients or services.
+The backend stays consumable by anything, not just this one dashboard. The frontend can change without the backend project structure caring. This makes the gateway closer to an actual reusable service instead of a backend that only exists to feed one UI.
 
-The frontend can also evolve without requiring the backend project structure to change.
-
-This separation makes the gateway closer to a reusable backend service rather than an API that only exists to serve one UI.
-
-It also makes the deployment responsibilities clearer:
+Deployment responsibilities fall out cleanly from that split too:
 
 ```
-Frontend  → Next.js
-Backend   → FastAPI
-Database  → PostgreSQL
-Cache     → Redis
+Frontend  → Next.js / Vercel
+Backend   → FastAPI / Render
+Database  → PostgreSQL / Neon
+Cache     → Redis / Upstash
 ```
 
 ### Trade-off
 
-Separating the repositories introduces additional configuration and deployment complexity compared with keeping everything inside a single application.
-
-For this project, I accepted that complexity because the backend is intended to remain independently usable.
+Two repos means more config and deployment overhead than one monolith would have. Worth it here because the backend was always meant to stand on its own.
 
 ---
 
@@ -372,26 +331,27 @@ For this project, I accepted that complexity because the backend is intended to 
 
 ### Problem
 
-It is easy to describe a cache as "fast" without actually measuring how much difference it makes.
-
-I wanted the project to show the difference between the normal processing path and the Redis cache path using measured data rather than assumptions.
+It's easy to say "the cache makes this fast" without ever proving it. I wanted actual numbers, not a vibe.
 
 ### Decision
 
-I created a standalone asynchronous benchmark script using Python and HTTPX.
-
-The benchmark sends unique payloads and compares:
+I built a standalone async benchmark script, Python + HTTPX, sending unique payloads and comparing:
 
 ```
-Cold request   → Full PII processing path
-Cached request → Redis cache hit
+Cold request
+     ↓
+Full PII processing path
+
+Cached request
+     ↓
+Redis cache hit
 ```
 
-The current benchmark uses 20 iterations and 40 total requests.
+20 iterations, 40 total requests.
 
 ### Result
 
-The local benchmark showed:
+The current local benchmark showed:
 
 | Metric | Value |
 | --- | --- |
@@ -399,25 +359,225 @@ The local benchmark showed:
 | Cached average | 10.41 ms |
 | Average improvement | ~1399x |
 
-These numbers are local measurements from the current implementation, not production performance guarantees.
+These are local numbers from the current implementation, not a production guarantee.
 
-The benchmark also showed that the cold path has significant latency variation, which indicates that the AI processing path is currently the expensive and variable part of the system.
+The benchmark also showed the cold path has significant latency variation — which tracks, since the cold path includes the AI processing workflow, currently the expensive and unpredictable part of the request.
 
 ### Trade-off
 
-The benchmark demonstrates the difference between cold and cached requests, but it is not a full production load test.
+This shows the cold-vs-cached gap. It doesn't prove anything about concurrent users or requests-per-second at scale. A real controlled load test is separate future work I haven't done.
 
-It does not prove that the system can handle a specific number of concurrent users or requests per second.
+What matters here is the performance claims are backed by an actual benchmark instead of a number I made up because it sounded impressive.
 
-A proper controlled load-testing setup is a separate future improvement.
+---
+
+## 9. Production Deployment
+
+### Problem
+
+A backend that only runs on localhost is fine for development, but it doesn't tell you anything about how the pieces actually behave once deployed. I wanted the API, database, Redis, and frontend talking to each other in a real environment, not just inside Docker Compose on my machine.
+
+### Decision
+
+I deployed using separate managed services:
+
+```
+Next.js
+   ↓
+Vercel
+   ↓
+FastAPI
+   ↓
+Render
+   ↓
+┌───────────────┬───────────────┐
+↓               ↓
+Neon            Upstash
+PostgreSQL      Redis
+```
+
+Backend and frontend stay separate; database and Redis are managed independently of both.
+
+### Why
+
+This keeps each service focused on one job without me having to run database or Redis infrastructure myself. It also forced me into things that never show up when everything's local:
+
+- Environment variables
+- Production CORS configuration
+- Managed PostgreSQL
+- Managed Redis
+- TLS connections
+- Docker deployment
+- Dynamic application ports
+- Database migrations against a live schema
+- Frontend-to-backend configuration
+- Production health checks
+
+### Trade-off
+
+Managed services make deployment way easier, but they bring in external dependencies and platform-specific quirks to configure around. For a portfolio project, that's a fair trade — the point was proving this works as a deployed system, not just as a local prototype.
+
+### Current deployment
+
+It's live right now, and production frontend talks to production API. The backend also exposes a health endpoint so I can check the service is actually up independent of the frontend.
+
+---
+
+## 10. Docker for Local Development and Deployment
+
+### Problem
+
+The project depends on multiple services — PostgreSQL, Redis. Making everyone set those up manually on every machine is a pain and doesn't reproduce cleanly.
+
+### Decision
+
+Docker and Docker Compose for local dev. Main services: FastAPI, PostgreSQL, Redis.
+
+### Why
+
+Docker gives the project a consistent environment and gets the supporting services running without installing and configuring everything directly on the host. Compose also makes the relationship between the API, database, and Redis explicit instead of implicit.
+
+### Production consideration
+
+The backend is containerized for deployment too. I had to adjust the Docker config to work with the dynamic port the production platform assigns, instead of assuming the app always runs on one fixed port.
+
+### Trade-off
+
+Docker is another layer to understand — container networking, volumes, ports, env vars, all of it. Worth taking on given how many services this project actually depends on and how much reproducibility matters here.
+
+---
+
+## 11. Database Migrations with Alembic
+
+### Problem
+
+Changing a schema by hand works fine on a small local project. It stops working once the app is deployed. Dropping the raw input column from the audit table shouldn't mean manually opening the production database and running SQL.
+
+### Decision
+
+Alembic manages schema changes. Every change is a migration that lives in the repo.
+
+### Why
+
+This gives the project a real history of how the schema evolved, and makes production migrations reproducible instead of ad-hoc. Right now there are migrations for:
+
+- Creating the initial audit schema
+- Removing the raw input column
+- Changing processing time storage from integer to float
+
+The production Neon database got updated through the migration workflow, not a manual schema edit.
+
+### Trade-off
+
+Migrations are another workflow to understand and maintain, and there's a real responsibility to test them before they hit production. I accepted that because schema changes belong in versioned code, not as undocumented manual operations someone has to remember they did.
+
+---
+
+## 12. Environment Configuration and Secrets
+
+### Problem
+
+The app needs credentials for Postgres, Redis, and the LLM provider. Hardcoding any of that would make the project unsafe to publish, full stop.
+
+### Decision
+
+Environment variables for configuration and secrets. Local dev uses a `.env` file; production secrets live in the deployment platform's config. `.env` is excluded via `.gitignore`, and a `.env.example` ships with the variable names so the project's runnable without exposing real credentials.
+
+### Why
+
+Keeps secrets out of source code entirely and makes the same codebase portable across environments — the app code doesn't care whether it's talking to local Postgres or Neon, that's just a different env var.
+
+### Trade-off
+
+More values to get right when setting the project up, and a missing or misnamed env var can cause a runtime failure that's annoying to track down. Still the correct trade-off — secrets don't belong in the repo, no exceptions.
+
+---
+
+## 13. Keeping Raw PII Out of Persistent Storage
+
+### Problem
+
+Once I stopped thinking of this as just an "AI demo" and started thinking of it as an actual privacy-focused system, something bugged me: a gateway that detects and redacts PII while quietly storing that same PII somewhere is a contradiction. Redacting the response and then keeping the raw input in the database defeats the point.
+
+### Decision
+
+The current design intentionally keeps the original raw input out of persistent audit records, and out of the Redis cache key or cached response too.
+
+The flow is:
+
+```
+Incoming request
+      ↓
+PII detection
+      ↓
+Sanitized response
+      ↓
+Audit-safe data
+```
+
+Not:
+
+```
+Incoming request
+      ↓
+PII detection
+      ↓
+Store original input everywhere
+```
+
+### Why
+
+The gateway's job is to reduce unnecessary PII exposure, not create more copies of the same sensitive data in different places. The audit record holds sanitized text, detected PII metadata, processing time, and a timestamp. The Redis cache holds sanitized response data and expires after 24 hours.
+
+### Trade-off
+
+This makes debugging and forensic scenarios harder — I can't reconstruct the original request straight from the database. I accepted that because storing raw PII indefinitely for debugging convenience undercuts the entire reason this project exists.
+
+And to be clear: this isn't a claim that the project is a finished compliance solution. Real production systems still need formal retention policies, access controls, encryption policies, and compliance review specific to whatever environment they run in.
+
+---
+
+## 14. What I Learned From These Decisions
+
+The biggest lesson out of all of this: throwing more AI at a problem doesn't automatically make it better. In a few places, the right engineering call was actually to take responsibility *away* from the model.
+
+Sanitization is the clearest example. I initially tried to make the model return exact character indexes — sounded smart, turned out to be unreliable. Moving that back into deterministic Python made the whole thing simpler and predictable instead of "usually works."
+
+That same thinking runs through the rest of the architecture:
+
+```
+LLM
+→ semantic PII discovery
+
+Pydantic
+→ structured validation
+
+Python
+→ deterministic sanitization
+
+LangGraph
+→ workflow orchestration
+
+Redis
+→ caching and rate limiting
+
+PostgreSQL
+→ persistent audit-related data
+
+FastAPI
+→ API and request handling
+
+Next.js
+→ user-facing dashboard
+```
+
+Each piece has one job. That mattered a lot more than trying to make the project look impressive by putting AI into every layer of it.
 
 ---
 
 ## Summary
 
-The main design principle behind the project is to avoid making one technology responsible for everything.
-
-The system uses different components for different responsibilities:
+The whole design comes down to not making one piece of tech responsible for everything:
 
 | Component | Responsibility |
 | --- | --- |
@@ -429,9 +589,6 @@ The system uses different components for different responsibilities:
 | PostgreSQL | Persistent audit-related data |
 | Next.js | User-facing dashboard |
 | Docker | Consistent development environment |
+| Alembic | Database schema migrations |
 
-The most important architectural lesson was the separation between AI-based discovery and deterministic data transformation.
-
-The LLM does not need to control every step of the process. It is more reliable to use the model where semantic understanding is useful and traditional deterministic code where exact behavior matters.
-
-That principle shaped several decisions in the project and is still guiding the areas that are being improved, especially privacy, performance, testing, and production readiness.
+The biggest architectural lesson: the model doesn't need to control every step. Use it where semantic understanding actually matters, use deterministic code where exact behavior matters — and don't blur that line just because it's an "AI project." That's the same principle still steering what's left to fix: privacy controls, performance, testing, and production readiness.
